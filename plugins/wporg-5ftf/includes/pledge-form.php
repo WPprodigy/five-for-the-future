@@ -7,7 +7,7 @@ namespace WordPressDotOrg\FiveForTheFuture\PledgeForm;
 
 use WordPressDotOrg\FiveForTheFuture;
 use WordPressDotOrg\FiveForTheFuture\{ Pledge, PledgeMeta, Contributor, Email };
-use WP_Error, WP_User;
+use WP_Error, WP_Post, WP_User;
 
 defined( 'WPINC' ) || die();
 
@@ -196,21 +196,60 @@ function send_contributor_confirmation_emails( $pledge_id, $contributor_id = nul
  * @return false|string
  */
 function render_form_manage() {
-	$action   = filter_input( INPUT_POST, 'action' );
-	$messages = [];
-	$updated  = false;
+	$pledge_id     = filter_input( INPUT_GET, 'pledge_id', FILTER_VALIDATE_INT );
+	$auth_token    = filter_input( INPUT_GET, 'auth_token', FILTER_SANITIZE_STRING );
+	$action        = filter_input( INPUT_GET, 'action' );
+	$messages      = [];
+	$errors        = [];
+	$updated       = false;
+	$can_view_form = false;
 
-	// @todo Get pledge ID from somewhere.
-	$data = PledgeMeta\get_pledge_meta();
+	if ( ! $pledge_id ) {
+		$pledge_id  = filter_input( INPUT_POST, 'pledge_id', FILTER_VALIDATE_INT );
+		$auth_token = filter_input( INPUT_POST, 'auth_token', FILTER_SANITIZE_STRING );
+	}
 
-	if ( 'Update Pledge' === $action ) {
-		$processed = process_form_manage();
+	if ( $pledge_id ) {
+		$can_view_form = visitor_can_view_manage_form( $pledge_id, $auth_token );
 
-		if ( is_wp_error( $processed ) ) {
-			$messages = array_merge( $messages, $processed->get_error_messages() );
-		} elseif ( 'success' === $processed ) {
-			$updated = true;
+		// Process a request for a management link.
+		if ( filter_input( INPUT_POST, 'get_manage_pledge_link' ) ) {
+			$pledge_admin = filter_input( INPUT_POST, 'pledge_admin_address', FILTER_VALIDATE_EMAIL );
+			$result       = send_manage_pledge_link( $pledge_id, $pledge_admin );
+
+			if ( is_wp_error( $result ) ) {
+				$errors[] = $result->get_error_message();
+			} else {
+				$messages[] = 'success, please check email'; //todo
+				// should show the success notice but not the form
+			}
+
+		} elseif ( 'Update Pledge' === $action ) {
+			if ( $can_view_form ) {
+				// if save form submitted, process and show success/error msg based on results
+				//
+				//// else nothing submitted, just show form to view it and use id and auth token from $_GET
+
+				$processed = process_form_manage();
+
+				if ( is_wp_error( $processed ) ) {
+					$errors = array_merge( $errors, $processed->get_error_messages() );
+				} elseif ( 'success' === $processed ) {
+					$updated = true;
+				}
+			}
+
+		// Display the edit pledge form.
+		} else {
+			if ( $can_view_form ) {
+				$data = PledgeMeta\get_pledge_meta( $pledge_id );
+			} else {
+				$data = array();
+			}
 		}
+
+	} else {
+		$errors[] = esc_html__( 'Pledge ID is not valid', 'wporg-5ftf' );
 	}
 
 	ob_start();
@@ -218,6 +257,61 @@ function render_form_manage() {
 	require FiveForTheFuture\PATH . 'views/form-pledge-manage.php';
 
 	return ob_get_clean();
+}
+
+//todo
+function send_manage_pledge_link( $pledge_id, $unverified_pledge_admin ) {
+	$error_message = sprintf(
+		__( 'That is not the correct email address. If you no longer know the correct address, please <a href="%s">email us</a>.', 'wporg-5ftf' ),
+		get_permalink( get_page_by_path( 'report' ) )
+	);
+
+	$result             = new WP_Error( 'invalid_pledge_email', $error_message );
+	$valid_pledge_admin = get_post( $pledge_id )->{ PledgeMeta\META_PREFIX . 'org-pledge-email' };
+
+	if ( $valid_pledge_admin === $unverified_pledge_admin ) {
+		$subject = __( 'Edit your Pledge', 'wporg-5ftf' );
+		$message =
+			'heres the link to edit your pledge, ' .
+			Email\get_authentication_url( $pledge_id, 'manage_pledge', get_permalink( get_page_by_path( 'manage-pledge' ) ), false )
+			// b/c false is set ^, the auth token can be used infinite # of times, but will still expire w/ in the 2 hour window
+		;
+
+		$result = Email\send_email( $valid_pledge_admin, $subject, $message, $pledge_id );
+
+		if ( ! $result ) {
+			$result = new WP_Error( 'email_failed', 'Email failed to send' );
+		}
+	}
+
+	return $result;
+}
+
+// todo
+function visitor_can_view_manage_form( $pledge_id, $auth_token ) {
+	return false;
+	$auth_token = filter_input( INPUT_GET, 'auth_token', FILTER_SANITIZE_STRING );
+
+	if ( ! $auth_token ) {
+		filter_input( INPUT_POST, 'auth_token', FILTER_SANITIZE_STRING );
+	}
+	if ( $pledge_id && $auth_token ) {
+		$valid_auth_token = Email\is_valid_authentication_token( $pledge_id, 'manage_pledge', $auth_token );
+	} else {
+		$valid_auth_token = false;
+	}
+
+	if ( ! $valid_auth_token ) {
+		if ( $pledge ) {
+			$errors[] = sprintf(
+				__( 'This link has expired, please <a href="%s">request another</a>.', 'wporg-5ftf' ),
+				get_permalink( $pledge )
+			);
+		} else {
+			$errors[] = __( 'The link you followed is invalid, please obtain a new one.', 'wporg-5ftf' );
+		}
+	}
+
 }
 
 /**
@@ -233,6 +327,10 @@ function process_form_manage() {
 	if ( $has_error ) {
 		return $has_error;
 	}
+
+	// if submitted manage admin email
+		// if valid, send email, and show success message
+		// if not, show error message
 
 	// todo email any new contributors for confirmation
 	// notify any removed contributors?

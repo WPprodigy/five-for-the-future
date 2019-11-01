@@ -37,6 +37,23 @@ const TOKEN_PREFIX = '5ftf_auth_token_';
 // Longer than `get_password_reset_key()` just to be safe. See https://core.trac.wordpress.org/ticket/43546#comment:34
 const TOKEN_LENGTH = 32;
 
+add_action( 'wp_head', __NAMESPACE__ . '\prevent_caching_auth_tokens', 99 );
+
+/**
+ * Prevent caching mechanisms from caching authentication tokens.
+ *
+ * Search engines would often be too slow to index tokens before they expire, but other mechanisms like Varnish,
+ * etc could create situations where they're leaked to others.
+ */
+function prevent_caching_auth_tokens() {
+	if ( ! isset( $_GET['auth_token'] ) && ! isset( $_POST['auth_token'] ) ) {
+		return;
+	}
+	// todo test, separate first commit
+
+	nocache_headers();
+}
+
 /**
  * Wrap `wp_mail()` with shared functionality.
  *
@@ -78,10 +95,14 @@ function send_email( $to, $subject, $message, $pledge_id ) {
  * @param string $action
  * @param int    $action_page_id The ID of the page that the user will be taken back to, in order to process their
  *                               confirmation request.
+ * @param bool   $use_once       Whether or not the token should be deleted after the first use. Only pass `false`
+ *                               when the action requires several steps in a flow, rather than a single step. For
+ *                               instance, be able to 1) view a private pledge; 2) make changes and save them; and
+ *                               3) reload the private pledge with the new changes displayed.
  *
  * @return string
  */
-function get_authentication_url( $pledge_id, $action, $action_page_id ) {
+function get_authentication_url( $pledge_id, $action, $action_page_id, $use_once = true ) {
 	$auth_token = array(
 		/*
 		 * This will create a CSPRN and is similar to how `get_password_reset_key()` and
@@ -90,6 +111,7 @@ function get_authentication_url( $pledge_id, $action, $action_page_id ) {
 		'value'      => wp_generate_password( TOKEN_LENGTH, false ),
 			// todo Ideally should encrypt at rest, see https://core.trac.wordpress.org/ticket/24783.
 		'expiration' => time() + ( 2 * HOUR_IN_SECONDS ),
+		'use_once'   => $use_once,
 	);
 
 	/*
@@ -155,11 +177,9 @@ function is_valid_authentication_token( $pledge_id, $action, $unverified_token )
 		$verified = true;
 
 		// Tokens should not be reusable, to increase security.
-		delete_post_meta( $pledge_id, TOKEN_PREFIX . $action );
-		// todo when used to manage pledge, token will probably get deleted when viewing, and then they won't be able to save
-			// fix that when create the manage process, though. for now this works for confirming email address.
-			// maye pass a `context` param to this function, either 'view' or 'update', and only delete if context is 'update' ?
-			// make sure view and update functions checks to make sure have valid token, not create though
+		if ( $valid_token['use_once'] !== false ) {
+			delete_post_meta( $pledge_id, TOKEN_PREFIX . $action );
+		}
 	}
 
 	return $verified;

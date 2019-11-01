@@ -119,6 +119,27 @@ get_header(); ?>
 
 			<footer class="entry-footer">
 				<a href="<?php the_permalink( $report_page ); ?>"><?php esc_html_e( 'Report a problem', 'wporg' ); ?></a>
+
+				<form action="<?php echo esc_url( get_permalink( get_page_by_path( 'manage-pledge' ) ) ) ?>" method="post">
+					<input type="hidden" name="pledge_id" value="<?php echo esc_attr( get_post()->ID ); ?>" />
+
+					<label for="pledge_admin_address">
+						<?php esc_html_e( 'Pledge Admin Email Address', 'wporg-5ftf' ); ?>
+					</label>
+
+					<input
+						id="pledge_admin_address"
+						name="pledge_admin_address"
+						type="email"
+						value=""
+					/>
+
+					<input
+						type="submit"
+						name="get_manage_pledge_link"
+						value="Confirm Manage Address"
+					/>
+				</form>
 			</footer>
 		</article>
 
